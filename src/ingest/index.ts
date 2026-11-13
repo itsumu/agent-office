@@ -32,7 +32,7 @@ import {
 import { applyDroidSettings, createDroidState, parseDroidLine } from "./droid.ts";
 import { createGeminiState, geminiShortId, parseGeminiDoc, parseGeminiLine } from "./gemini.ts";
 import {
-  applyOpencode, asMessage, asPart, asSession, createOpencodeState, messagesSql, partsSql, sessionSql,
+  applyOpencode, asMessage, asPart, asSession, createOpencodeState, messagesSql, messagesSqlV2, partsSql, partsSqlV2, sessionSql,
   type OcMessage, type OcPart, type OcSession, type OpencodeState,
 } from "./opencode.ts";
 import { createQwenState, parseQwenLine } from "./qwen.ts";
@@ -186,6 +186,8 @@ class Watcher {
 
   private readonly oc = new Map<string, { st: OpencodeState; updated: number }>();
   private ocCols?: Set<string>;
+  /** True when the database uses opencode >= 2.x's session_v2 / session_message layout. */
+  private ocV2 = false;
   private ocSig = "";
   private ocCursor?: number;
   private ocOff = false;
@@ -927,6 +929,11 @@ class Watcher {
 
   /* ----------------------------------------------------------- opencode */
 
+  /** Session table for this database: 1.x `session`, 2.x `session_v2`. */
+  private ocTable(): string {
+    return this.ocV2 ? "session_v2" : "session";
+  }
+
   private async pollOpencode(now: number, full: boolean, listed: Map<string, FileStat>): Promise<void> {
     const db = this.ocDb!;
     const main = listed.get(db);
@@ -937,21 +944,27 @@ class Watcher {
     this.ocSig = sig;
     try {
       if (!this.ocCols) {
-        const cols = await this.source.query(db, "select name from pragma_table_info('session')");
-        if (cols === null) {
+        // 1.x keeps sessions in `session`; 2.x renamed it to `session_v2` and folded
+        // parts into `session_message.data`. Detect the layout before asking for columns.
+        const tables = await this.source.query(db, "select name from sqlite_master where type='table'");
+        if (tables === null) {
           this.ocOff = true;
           this.log(`ingest: ${BRAND.opencode.name} needs SQLite (Node >= 22.5${this.local ? "" : ", or sqlite3 on the remote"}); skipping it${this.local ? "" : ` on ${this.name}`}`);
           return;
         }
+        const names = new Set(tables.map((r) => String(r.name)));
+        this.ocV2 = names.has("session_v2") && !names.has("session");
+        const cols = (await this.source.query(db, `select name from pragma_table_info('${this.ocTable()}')`)) ?? [];
         this.ocCols = new Set(cols.map((r) => String(r.name)));
         if (!this.ocCols.has("time_updated")) {
           this.ocOff = true;
           this.log(`ingest: ${BRAND.opencode.name} database has an unknown layout; skipping it`);
           return;
         }
+        if (this.ocV2) this.log(`ingest: ${BRAND.opencode.name} 2.x layout (session_v2 / session_message)`);
       }
       const since = this.ocCursor ?? now - ACTIVE_WINDOW_MS;
-      const rows = (await this.source.query(db, sessionSql(this.ocCols, "updated"), [Math.floor(since) - 2_000])) ?? [];
+      const rows = (await this.source.query(db, sessionSql(this.ocCols, "updated", this.ocTable()), [Math.floor(since) - 2_000])) ?? [];
       const sessions = rows.map(asSession).filter((s): s is OcSession => !!s);
       for (const s of sessions) this.ocCursor = Math.max(this.ocCursor ?? since, s.time_updated);
       this.ocCursor ??= since;
@@ -976,12 +989,14 @@ class Watcher {
     const limit = first ? OC_BACKFILL_MSGS : OC_LIVE_MSGS;
     const msgs: OcMessage[] = [];
     const parts: OcPart[] = [];
+    const msgSql = this.ocV2 ? messagesSqlV2 : messagesSql;
+    const partSql = this.ocV2 ? partsSqlV2 : partsSql;
     for (let i = 0; i < sessions.length; i += 100) {
       const ids = sessions.slice(i, i + 100).map((s) => s.id);
       // Independent queries over the same window: one round trip of wall time on a remote.
       const [mrows, prows] = await Promise.all([
-        this.source.query(db, messagesSql(ids.length), [...ids, limit]),
-        this.source.query(db, partsSql(ids.length), [...ids, limit]),
+        this.source.query(db, msgSql(ids.length), [...ids, limit]),
+        this.source.query(db, partSql(ids.length), [...ids, limit]),
       ]);
       for (const r of mrows ?? []) {
         const m = asMessage(r);
@@ -1028,7 +1043,7 @@ class Watcher {
     const pid = st.main.parentId!;
     let parent = this.registry.get(pid);
     if (!parent) {
-      const rows = (await this.source.query(this.ocDb!, sessionSql(this.ocCols!, "id"), [pid])) ?? [];
+      const rows = (await this.source.query(this.ocDb!, sessionSql(this.ocCols!, "id", this.ocTable()), [pid])) ?? [];
       const ps = rows.map(asSession).find((x): x is OcSession => !!x);
       if (ps && !this.oc.has(ps.id)) await this.ocLoad([ps], true, s.time_updated);
       parent = this.registry.get(pid);

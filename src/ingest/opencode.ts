@@ -37,6 +37,10 @@ export interface OcMessage {
   finish?: string | null;
   completed?: number | null;
   err?: string | null;
+  /** opencode >= 2: the user message's text length (its text lives on the message, not in a part). */
+  text_len?: number | null;
+  /** opencode >= 2: tokens are on the message, with no step-finish part. */
+  tokens?: number | null;
 }
 
 export interface OcPart {
@@ -68,6 +72,8 @@ interface MsgSeen {
   prompted: boolean;
   done: boolean;
   errored: boolean;
+  /** Whether a v2 message's tokens have already been counted. */
+  counted?: boolean;
 }
 
 export interface OpencodeState extends ParserState {
@@ -121,7 +127,8 @@ export function applyOpencode(state: OpencodeState, messages: OcMessage[], parts
         ms.prompted = true;
         continue;
       }
-      if (ps.some((p) => (p.type === "text" && !p.synthetic && (p.text_len ?? 0) > 0) || p.type === "file")) {
+      // In opencode >= 2 the user text sits on the message itself (no text part).
+      if (ps.some((p) => (p.type === "text" && !p.synthetic && (p.text_len ?? 0) > 0) || p.type === "file") || (m.text_len ?? 0) > 0) {
         ms.prompted = true;
         ctx.pending.clear();
         out.push(...emit(ctx, "prompt", iso(m.time_created), { summary: "New prompt" }));
@@ -132,6 +139,12 @@ export function applyOpencode(state: OpencodeState, messages: OcMessage[], parts
     if (m.model) ctx.model = m.model;
     if (m.cwd) setCwd(ctx, m.cwd);
     for (const p of ps) out.push(...part(state, ctx, p));
+    // opencode >= 2 has no step-finish part: the message carries the tokens. Count
+    // them after the parts, where 1.x's step-finish part used to contribute them.
+    if (typeof m.tokens === "number" && m.tokens > 0 && !ms.counted) {
+      ms.counted = true;
+      ctx.pendingTokens += m.tokens;
+    }
     if (m.err && !ms.errored) {
       ms.errored = ms.done = true;
       ctx.pending.clear();
@@ -227,12 +240,12 @@ function pendingFor(p: OcPart): PendingTool {
 /* ------------------------------------------------------------------- SQL */
 
 /** Columns of opencode's session table vary by version; only ask for what exists. */
-export function sessionSql(cols: Set<string>, where: "updated" | "id"): string {
+export function sessionSql(cols: Set<string>, where: "updated" | "id", table = "session"): string {
   const agent = cols.has("agent") ? "agent" : "null as agent";
   const archived = cols.has("time_archived") ? " and time_archived is null" : "";
   return where === "updated"
-    ? `select id, parent_id, directory, ${agent}, time_created, time_updated from session where time_updated > ?${archived} order by time_updated limit 200`
-    : `select id, parent_id, directory, ${agent}, time_created, time_updated from session where id = ?`;
+    ? `select id, parent_id, directory, ${agent}, time_created, time_updated from ${table} where time_updated > ?${archived} order by time_updated limit 200`
+    : `select id, parent_id, directory, ${agent}, time_created, time_updated from ${table} where id = ?`;
 }
 
 const ph = (n: number) => Array.from({ length: n }, () => "?").join(",");
@@ -266,6 +279,60 @@ ${J("$.synthetic")} as synthetic,
 case when ${J("$.type")} = 'text' then length(${J("$.text")}) end as text_len,
 case when ${J("$.type")} = 'step-finish' then coalesce(${J("$.tokens.total")}, coalesce(${J("$.tokens.input")},0) + coalesce(${J("$.tokens.output")},0) + coalesce(${J("$.tokens.reasoning")},0) + coalesce(${J("$.tokens.cache.read")},0) + coalesce(${J("$.tokens.cache.write")},0)) end as tokens
 from part p where p.message_id in (select id from m)`;
+}
+
+/* -------------------------------------------- opencode >= 2.x schema */
+
+/*
+ * 2.x renamed the tables (session_v2, session_message) and folded parts into
+ * each message's data.content[] JSON; there is no step-finish part any more
+ * (tokens live on the message). These queries reshape that layout into the
+ * OcMessage / OcPart rows applyOpencode() already understands, and map the
+ * renamed tools back to their 1.x names so the rest of the parser is shared:
+ * shell/execute -> bash, subagent -> task, patch -> apply_patch. As with the
+ * 1.x queries, no prompt, reasoning or file text is ever selected.
+ */
+export function messagesSqlV2(sessions: number): string {
+  return `with r as (select id, row_number() over (partition by session_id order by time_created desc, id desc) as rn from session_message where session_id in (${ph(sessions)}))
+select m.id as id, m.session_id as session_id, m.time_created as time_created, m.time_updated as time_updated,
+m.type as role, json_extract(m.data,'$.model.id') as model, null as cwd,
+json_extract(m.data,'$.finish') as finish,
+case when json_extract(m.data,'$.finish') is not null and json_extract(m.data,'$.finish') not in ('tool-calls','unknown') then m.time_updated end as completed,
+coalesce(json_extract(m.data,'$.error.name'), json_extract(m.data,'$.error.type'), json_extract(m.data,'$.error.message')) as err,
+case when m.type = 'user' then length(json_extract(m.data,'$.text')) end as text_len,
+coalesce(json_extract(m.data,'$.tokens.total'),
+  coalesce(json_extract(m.data,'$.tokens.input'),0) + coalesce(json_extract(m.data,'$.tokens.output'),0)
+  + coalesce(json_extract(m.data,'$.tokens.reasoning'),0)
+  + coalesce(json_extract(m.data,'$.tokens.cache.read'),0)
+  + coalesce(json_extract(m.data,'$.tokens.cache.write'),0)) as tokens
+from session_message m join r on r.id = m.id where r.rn <= ?`;
+}
+
+export function partsSqlV2(sessions: number): string {
+  const V = (path: string) => `json_extract(p.value,'${path}')`;
+  const name = V("$.name");
+  const tool = `case ${name} when 'shell' then 'bash' when 'execute' then 'bash' when 'subagent' then 'task' when 'patch' then 'apply_patch' else ${name} end`;
+  return `with r as (select id, row_number() over (partition by session_id order by time_created desc, id desc) as rn from session_message where session_id in (${ph(sessions)})),
+m as (select id from r where rn <= ?),
+w as (select id, data, time_created, time_updated from session_message where id in (select id from m))
+select coalesce(${V("$.id")}, w.id || ':' || p.key) as id, w.id as message_id,
+coalesce(${V("$.time.created")}, w.time_created) as time_created,
+coalesce(${V("$.time.completed")}, w.time_updated) as time_updated,
+${V("$.type")} as type, ${tool} as tool, ${V("$.state.status")} as status,
+substr(${V("$.state.input.command")},1,4000) as command,
+coalesce(${V("$.state.input.filePath")}, ${V("$.state.input.file_path")}, ${V("$.state.input.path")}) as file,
+${V("$.state.input.path")} as path, ${V("$.state.input.pattern")} as pattern, ${V("$.state.input.include")} as include,
+${V("$.state.input.url")} as url,
+coalesce(${V("$.state.input.subagent_type")}, ${V("$.state.input.agent")}) as subagent,
+${V("$.state.input.name")} as skill,
+${V("$.state.metadata.exit")} as exit,
+case when ${name} in ('shell','bash','execute') and ${V("$.state.status")} in ('completed','error')
+  then substr(coalesce(${V("$.state.content[0].text")}, ${V("$.state.output")}), -20000) end as out,
+case when ${name} in ('patch','apply_patch') then (select group_concat(coalesce(json_extract(f.value,'$.relativePath'), json_extract(f.value,'$.filePath'), json_extract(f.value,'$.file')), char(10)) from json_each(p.value,'$.state.metadata.files') f) end as files,
+case when ${name} in ('patch','apply_patch') then substr(${V("$.state.input.patchText")},1,4000) end as patch,
+${V("$.synthetic")} as synthetic,
+case when ${V("$.type")} = 'text' then length(${V("$.text")}) end as text_len
+from w, json_each(w.data, '$.content') p`;
 }
 
 /** Rows come back loosely typed (and from a remote's sqlite3 CLI); keep only well-formed ones. */

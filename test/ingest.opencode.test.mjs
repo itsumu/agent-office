@@ -206,3 +206,98 @@ test("opencode: a second write in the same millisecond still reaches the office"
     rmSync(s.dir, { recursive: true, force: true });
   }
 });
+
+/* ------------------------------------------------ opencode >= 2.x layout */
+
+function makeV2Db(dir) {
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "opencode.db");
+  const db = new sqlite.DatabaseSync(path);
+  db.exec(`pragma journal_mode = wal;
+    create table session_v2 (id text primary key, project_id text, parent_id text, directory text, agent text, model text,
+      time_created integer, time_updated integer, time_archived integer);
+    create table session_message (id text primary key, session_id text, type text, seq integer, time_created integer, time_updated integer, data text);
+    create index sm_session_time_idx on session_message (session_id, time_created, id);`);
+  const now = () => Date.now();
+  const api = {
+    path,
+    session(id, o = {}) {
+      const t = now();
+      db.prepare("insert or replace into session_v2 (id, parent_id, directory, agent, time_created, time_updated) values (?,?,?,?,?,?)")
+        .run(id, o.parent ?? null, o.dir ?? "/tmp/demo-app", o.agent ?? "build", t, t);
+    },
+    touch(id, t = now()) {
+      db.prepare("update session_v2 set time_updated = ? where id = ?").run(t, id);
+    },
+    message(id, sid, type, data, t = now()) {
+      db.prepare("insert or replace into session_message (id, session_id, type, seq, time_created, time_updated, data) values (?,?,?,?,?,?,?)")
+        .run(id, sid, type, 0, t, t, JSON.stringify(data));
+      api.touch(sid, t);
+    },
+    close: () => db.close(),
+  };
+  return api;
+}
+
+const asstV2 = (content, o = {}) => ({
+  time: { created: Date.now() }, agent: "build", model: { id: "claude-opus-5-5", providerID: "anthropic" },
+  content, finish: "tool-calls",
+  tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 30, write: 0 } }, cost: 0, ...o,
+});
+
+const toolV2 = (id, name, status, input, extra = {}) => ({
+  type: "tool", id, name,
+  state: { status, input, ...(extra.content ? { content: extra.content } : {}), ...(extra.metadata ? { metadata: extra.metadata } : {}) },
+  time: { created: Date.now(), ran: Date.now(), completed: Date.now() },
+});
+
+function seedV2(db) {
+  db.session("ses_main");
+  db.message("msg_001", "ses_main", "user", { time: { created: Date.now() }, text: "run the tests please", files: [], agents: [] });
+  db.message("msg_002", "ses_main", "assistant", asstV2([
+    { type: "reasoning", text: "secret plan", time: { created: Date.now() } },
+    toolV2("prt_003", "shell", "completed", { command: "npm test" }, { content: [{ type: "text", text: "ok" }], metadata: { exit: 0 } }),
+  ]));
+}
+
+test("opencode 2.x (session_v2 + content[]): backfill and live parts", async (t) => {
+  if (!sqlite) return t.skip("node:sqlite not available");
+  const dir = mkdtempSync(join(tmpdir(), "agentoffice-oc2-"));
+  const db = makeV2Db(join(dir, "opencode"));
+  seedV2(db);
+  const events = [];
+  const ingest = I.createIngest({
+    agents: ["opencode"], onEvent: (e) => events.push(e), watch: false,
+    env: { AGENT_OFFICE_OPENCODE_DIR: join(dir, "opencode"), AGENT_OFFICE_HOME: join(dir, "ao") },
+  });
+  const tick = async () => {
+    await ingest.tick();
+    return events.splice(0);
+  };
+  try {
+    const back = await tick();
+    assert.deepEqual(kinds(back), ["session_start", "test_pass"], `backfill kinds: ${JSON.stringify(kinds(back))}`);
+    assert.equal(back[0].project, "demo-app");
+    assert.equal(back[0].model, "claude-opus-5-5");
+    assert.equal(back[0].tokens, 150, "2.x tokens come from the message, not a step-finish part");
+    // Prompt text, reasoning and command output never reach a label.
+    assert.ok(back.every((e) => !/please|secret|ok$/.test(e.summary ?? "")));
+
+    // A live read tool (2.x name `read`) goes running -> completed in the content array.
+    db.message("msg_003", "ses_main", "assistant", asstV2([
+      toolV2("prt_005", "read", "running", { path: "/tmp/demo-app/src/app.ts" }),
+    ]));
+    let evs = await tick();
+    assert.deepEqual(kinds(evs), ["tool_start"]);
+    assert.equal(evs[0].summary, "Read app.ts");
+    db.message("msg_003", "ses_main", "assistant", asstV2([
+      toolV2("prt_005", "read", "completed", { path: "/tmp/demo-app/src/app.ts" }, { content: [{ type: "text", text: "file body" }] }),
+    ]));
+    assert.deepEqual(kinds(await tick()), ["tool_end"]);
+    assert.deepEqual(await tick(), [], "the same rows say nothing on the next poll");
+  } finally {
+    ingest.stop();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
