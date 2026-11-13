@@ -1,5 +1,12 @@
 node_modules
 dist
+
+# Build outputs: bundles, the portable Windows exe and its staging area
+release/
+.exe-stage/
+*.exe
+*.zip
+
 .DS_Store
 *.log
 site/dist
