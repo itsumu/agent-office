@@ -19,7 +19,7 @@
  */
 import type { ApprovalAnswer, ControlSession } from "../../../src/shared/control.ts";
 import type { OfficeEvent } from "../../../src/shared/events.ts";
-import { h, setText } from "../dom.ts";
+import { canAutoFocus, h, setText } from "../dom.ts";
 import { glyph, glyphFor, icon } from "../icons.ts";
 import { agentColor, agentName, logo } from "../logos.ts";
 import { api, ControlError, type StreamState } from "./api.ts";
@@ -315,7 +315,7 @@ export function createSessionPanel(store: ControlStore, opts: SessionPanelOpts):
         if (view !== mine || id !== s.id) return;
         mine.loading = false;
         build(mine, s.id, m);
-        if (!el.hidden && kind === "terminal" && (!document.activeElement || document.activeElement === document.body || el.contains(document.activeElement))) {
+        if (!el.hidden && kind === "terminal" && canAutoFocus() && (!document.activeElement || document.activeElement === document.body || el.contains(document.activeElement))) {
           requestAnimationFrame(() => view === mine && mine.term?.focus());
         }
       },
@@ -690,6 +690,7 @@ export function createSessionPanel(store: ControlStore, opts: SessionPanelOpts):
         unmount();
       }
       sync();
+      const wasHidden = el.hidden;
       if (el.hidden) {
         el.hidden = false;
         el.classList.remove("enter");
@@ -699,6 +700,9 @@ export function createSessionPanel(store: ControlStore, opts: SessionPanelOpts):
       document.body.classList.add("has-session");
       requestAnimationFrame(() => {
         view?.term?.fit();
+        // A re-open driven by the event stream must not re-take focus, and an
+        // automatic focus must never interrupt someone typing on the page.
+        if (!wasHidden || !canAutoFocus()) return;
         if (view?.kind === "terminal") view.term?.focus();
         else if (!input.disabled && window.innerWidth >= 640) input.focus();
       });

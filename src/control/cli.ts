@@ -34,7 +34,9 @@ export const WATCH_ONLY = "hiring and driving agents from the page needs macOS o
 /** The program and arguments that open `url` in the default browser. Windows' cmd.exe by full path: by name, the current folder's would win. */
 export function browserCommand(url: string, platform: string = process.platform, env: NodeJS.ProcessEnv = process.env): [string, string[]] {
   if (platform === "darwin") return ["open", [url]];
-  if (platform === "win32") return [windowsSystemBinary("cmd.exe", env), ["/c", "start", '""', url]];
+  // explorer.exe is a GUI binary: `cmd /c start` would spin up a console window
+  // (and on some setups briefly take focus) just to hand a URL to the browser.
+  if (platform === "win32") return [windowsSystemBinary("explorer.exe", env), [url]];
   return ["xdg-open", [url]];
 }
 

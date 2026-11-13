@@ -44,6 +44,23 @@ export function setText(el: Element, text: string): void {
   if (el.textContent !== text) el.textContent = text;
 }
 
+/**
+ * Whether the page may move focus automatically right now. The tab has to be
+ * the active window, and the user must not be in the middle of typing: an
+ * event stream (arrivals, approvals, status changes) must never pull the
+ * keyboard out from under someone mid-sentence.
+ */
+export function canAutoFocus(): boolean {
+  if (typeof document === "undefined" || typeof document.hasFocus !== "function" || !document.hasFocus()) return false;
+  const active = document.activeElement as HTMLElement | null;
+  return !(active && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)));
+}
+
+/** focus() gated by canAutoFocus(), for panels and cards that open on their own. */
+export function focusIfIdle(el: HTMLElement | null | undefined, opts?: FocusOptions): void {
+  if (el && canAutoFocus()) el.focus(opts);
+}
+
 const NS = "http://www.w3.org/2000/svg";
 
 export function svgEl<K extends keyof SVGElementTagNameMap>(

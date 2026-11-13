@@ -24,7 +24,7 @@
  */
 import type { ChatItem, ControlSession } from "../../../src/shared/control.ts";
 import type { ToolCategory } from "../../../src/shared/events.ts";
-import { h, reducedMotion, setText } from "../dom.ts";
+import { focusIfIdle, h, reducedMotion, setText } from "../dom.ts";
 import { glyph, glyphFor, type Glyph } from "../icons.ts";
 import { agentName, logo } from "../logos.ts";
 import { chatPath, stream, type Stream, type StreamState } from "./api.ts";
@@ -804,7 +804,7 @@ export function createChat(sessionId: string, opts: ChatOpts): ChatView {
     if (card) {
       pinned = false;
       card.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
-      card.querySelector<HTMLElement>(".ap-allow")?.focus({ preventScroll: true });
+      focusIfIdle(card.querySelector<HTMLElement>(".ap-allow"), { preventScroll: true });
     }
   }
 
