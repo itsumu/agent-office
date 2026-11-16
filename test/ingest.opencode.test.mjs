@@ -183,6 +183,14 @@ test("opencode on a remote: the same rows through sqlite3 (or node) over sh, hos
   }
 });
 
+test("opencodeLive only admits sessions that can stay in the office", () => {
+  const now = Date.now();
+  assert.equal(I.opencodeLive(now - 1_000, now), true);
+  assert.equal(I.opencodeLive(now - 19 * 60_000, now), true);
+  assert.equal(I.opencodeLive(now - 25 * 60_000, now), false, "past GONE_MS: a backfill would walk in and leave");
+  assert.equal(I.opencodeLive(now - 34 * 60_000, now), false);
+});
+
 test("opencode: a second write in the same millisecond still reaches the office", async (t) => {
   const s = await scenario(t, (dir, onEvent) => I.createIngest({ agents: ["opencode"], onEvent, watch: false, env: { AGENT_OFFICE_OPENCODE_DIR: join(dir, "opencode"), AGENT_OFFICE_HOME: join(dir, "ao") } }));
   if (!s) return;

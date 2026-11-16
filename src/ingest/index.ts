@@ -66,6 +66,12 @@ export const INTERN_DONE_MS = 60_000;
 export const GEMINI_SETTLE_MS = 5_000;
 /** Cursor rewrites its transcript and closes turns mid-task: wait longer before believing it is idle. */
 export const CURSOR_SETTLE_MS = 8_000;
+
+/** A session that hasn't changed in GONE_MS is not live: backfilling it would
+ *  make it walk in on an old timestamp and be sent home again immediately. */
+export function opencodeLive(timeUpdated: number, now: number): boolean {
+  return now - timeUpdated <= GONE_MS;
+}
 const KEEPALIVE_MS = 60_000;
 /** Files quiet this long stop being watched (they are picked up again if they grow). */
 const FORGET_MS = GONE_MS + 10 * 60_000;
@@ -965,9 +971,13 @@ class Watcher {
         }
         if (this.ocV2) this.log(`ingest: ${BRAND.opencode.name} 2.x layout (session_v2 / session_message)`);
       }
-      const since = this.ocCursor ?? now - ACTIVE_WINDOW_MS;
+      // The cursor is a fixed point in the past. Without a sliding floor a quiet
+      // office keeps re-reading a session that stopped updating long ago; once
+      // housekeeping (FORGET_MS) drops its cache, every full scan backfills it
+      // on that old timestamp and the quiet timer sends it straight home again.
+      const since = Math.max(this.ocCursor ?? 0, now - ACTIVE_WINDOW_MS);
       const rows = (await this.source.query(db, sessionSql(this.ocCols, "updated", this.ocTable()), [Math.floor(since) - 2_000])) ?? [];
-      const sessions = rows.map(asSession).filter((s): s is OcSession => !!s);
+      const sessions = rows.map(asSession).filter((s): s is OcSession => !!s && opencodeLive(s.time_updated, now));
       for (const s of sessions) this.ocCursor = Math.max(this.ocCursor ?? since, s.time_updated);
       this.ocCursor ??= since;
       // The database changed (sig above), and opencode stamps in ms: a second write in the same ms as
