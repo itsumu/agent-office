@@ -10,7 +10,7 @@
  * background service starts it: login environment first, no browser, a log
  * file instead of the terminal.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import type { AgentKind, OfficeEvent } from "./shared/events.ts";
 import { BRAND } from "./shared/events.ts";
@@ -636,10 +636,25 @@ async function main(): Promise<void> {
       }, 5_000)
     : undefined;
   readvertise?.unref?.();
+  // Cursor keeps writing ~/.cursor/ai-tracking/ai-code-tracking.db while an
+  // agent works, even when its transcript jsonl goes quiet for a long command.
+  // Use that mtime as a heartbeat so a working Cursor worker is neither called
+  // idle nor sent home by the quiet timer. Older Cursors lack the file.
+  const cursorBeat = join(homedir(), ".cursor", "ai-tracking", "ai-code-tracking.db");
+  const cursorBeatTimer = o.demo ? undefined : setInterval(() => {
+    try {
+      if (Date.now() - statSync(cursorBeat).mtimeMs > 3 * 60_000) return;
+      for (const w of state.sessions()) if (w.agent === "cursor") state.alive(w.workerId);
+    } catch {
+      // Missing / unreadable: the normal quiet rules apply.
+    }
+  }, 10_000);
+  cursorBeatTimer?.unref?.();
   const shutdown = async () => {
     if (closing) process.exit(0);
     closing = true;
     clearInterval(readvertise);
+    clearInterval(cursorBeatTimer);
     if (!o.service) out(`\n${PAD}${dim("Closing the office. Bye.")}`);
     serviceLog?.("office closing");
     // Agents first: their workers walk out while the stream is still up.

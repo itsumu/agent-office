@@ -59,6 +59,10 @@ const CATEGORIES = new Set<ToolCategory>([
  * turn ended while its interns work is supervising them, not waiting on its human.
  */
 const SUPERVISE_MS = 5 * 60_000;
+/** Cursor can be silent for a whole long-running task (no tool results, no progress
+ *  in the transcript). Keep its worker for an hour; the app heartbeat in cli.ts
+ *  refreshes the clock while Cursor is demonstrably alive. */
+const CURSOR_QUIET_MS = 60 * 60_000;
 /** A local session with no agent process left goes home once it has been quiet this long. */
 export const PRESENCE_QUIET_MS = 15_000;
 /** Events that only describe an existing worker; never create one. */
@@ -228,6 +232,14 @@ export class OfficeState {
     this.holds.add(workerId);
   }
 
+  /** Refresh the quiet clock without changing status or emitting anything.
+   *  An application-level heartbeat proves the agent is alive even when its
+   *  transcript has gone silent (Cursor records no tool results or progress). */
+  alive(workerId: string): void {
+    const w = this.workers.get(workerId);
+    if (w && w.removeAt === undefined) w.lastActive = this.now();
+  }
+
   release(workerId: string): void {
     this.holds.delete(workerId);
   }
@@ -354,6 +366,9 @@ export class OfficeState {
       // all). Keep it out of idle/gone until it closes, capped at the gone
       // timeout so a stuck call can't leave a worker in the office forever.
       const openCall = (w.openTools ?? 0) > 0 && w.openSince !== undefined && now - w.openSince < this.goneMs;
+      const slow = w.state.agent === "cursor";
+      const idleAt = slow ? CURSOR_QUIET_MS : this.idleMs;
+      const goneAt = slow ? CURSOR_QUIET_MS : this.goneMs;
       if (w.heldWait && !supervising) {
         // The interns are done and nothing moved since: now it is the human's turn.
         w.heldWait = undefined;
@@ -362,9 +377,9 @@ export class OfficeState {
         this.publish(e);
         continue;
       }
-      if (quiet >= this.goneMs && !supervising && !this.holds.has(w.state.workerId) && !openCall) {
+      if (quiet >= goneAt && !supervising && !this.holds.has(w.state.workerId) && !openCall) {
         this.remove(w, { ...this.base(w, ts), kind: w.state.parentId ? "subagent_end" : "session_end" });
-      } else if (quiet >= this.idleMs && !openCall && w.state.status !== "idle" && w.state.status !== "waiting") {
+      } else if (quiet >= idleAt && !openCall && w.state.status !== "idle" && w.state.status !== "waiting") {
         // A worker waiting on its human still needs them however long it waits; it only goes home.
         const e: RawEvent = { ...this.base(w, ts), kind: "idle" };
         this.fold(w, e, now);

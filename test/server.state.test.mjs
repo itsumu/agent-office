@@ -163,13 +163,29 @@ test("a busy Cursor worker isn't called idle while its transcript is silent", ()
   assert.equal(seen.at(-1).kind, "tool_start", "a silent Cursor transcript is not idle");
   assert.equal(state.snapshot().workers[0].status, "tool_start");
   advance(GONE_MS);
-  assert.equal(seen.at(-1).kind, "session_end", "but the quiet timer still sends it home");
+  assert.ok(!seen.some((e) => e.kind === "session_end"), "a long silent task keeps it past the normal 20min");
+  advance(2 * GONE_MS + 60_000);
+  assert.equal(seen.at(-1).kind, "session_end", "but Cursor's hour-long quiet timer still sends it home");
   // Other agents keep the normal 90s idle.
   const other = office();
   other.state.ingest(other.ev({ kind: "session_start" }));
   other.state.ingest(other.ev({ kind: "tool_end", tool: "Read" }));
   other.advance(IDLE_MS);
   assert.equal(other.seen.at(-1).kind, "idle");
+});
+
+test("an application heartbeat keeps a silent worker from going idle or home", () => {
+  const { state, seen, ev, advance } = office();
+  state.ingest(ev({ kind: "session_start" }));
+  state.ingest(ev({ kind: "tool_end", tool: "Read" }));
+  for (let i = 0; i < 5; i++) {
+    state.alive("s1");
+    advance(IDLE_MS - 1_000);
+  }
+  assert.ok(!seen.some((e) => e.kind === "idle" || e.kind === "session_end"), "a live agent is never called idle or sent home");
+  assert.equal(state.snapshot().workers[0].status, "tool_end", "the heartbeat doesn't change the status");
+  advance(IDLE_MS);
+  assert.equal(seen.at(-1).kind, "idle", "once the heartbeat stops the normal quiet rules resume");
 });
 
 test("a worker waiting on its human stays waiting until it goes home", () => {
