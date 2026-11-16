@@ -23,6 +23,8 @@ export interface OfficeScene {
   onHover?(cb: (workerId: string | null) => void): void;
   /** Highlight a worker (from the feed or inspector), null clears. */
   select(workerId: string | null): void;
+  /** The human read this worker's reply: lower its raised hand until the next turn ends. */
+  ack(workerId: string): void;
   /** Pan/zoom the camera so this worker is centred. */
   focus(workerId: string): void;
   /**

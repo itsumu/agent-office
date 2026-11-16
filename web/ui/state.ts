@@ -65,6 +65,13 @@ export class OfficeModel {
   readonly hostsSeen = new Map<string, Host>();
   readonly offline = new Set<string>();
 
+  /** The human has looked at a waiting worker's reply: stop counting it as needing them.
+   *  Purely local to this page; the next waiting event from the agent raises the hand again. */
+  ack(id: string): void {
+    const w = this.workers.get(id);
+    if (w && w.status === "waiting") w.status = "reply";
+  }
+
   load(s: Snapshot): void {
     this.workers.clear();
     this.hostsSeen.clear();

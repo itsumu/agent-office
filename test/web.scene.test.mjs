@@ -49,6 +49,20 @@ test("the cat sorts behind pod desks, chairs and benches", () => {
   assert.ok(key > dy - 20, "but it still sorts with the pod, not at the very back");
 });
 
+test("reading a waiting worker clears 'needs you'; the next turn raises it again", () => {
+  const m = new OfficeModel();
+  const base = { workerId: "w1", agent: "claude", ts: new Date().toISOString() };
+  m.apply({ ...base, kind: "waiting" });
+  assert.equal(m.get("w1").status, "waiting");
+  m.ack("w1");
+  assert.equal(m.get("w1").status, "reply", "read: no longer counted as needing you");
+  m.ack("w1");
+  assert.equal(m.get("w1").status, "reply", "idempotent");
+  m.apply({ ...base, kind: "prompt" });
+  m.apply({ ...base, kind: "waiting" });
+  assert.equal(m.get("w1").status, "waiting", "a new turn raises the hand again");
+});
+
 /** A pod with one main worker and `n` interns, packed and settled. */
 function crew(n, mains = 1) {
   const layout = new Layout();

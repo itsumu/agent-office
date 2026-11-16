@@ -824,6 +824,9 @@ export function create(mount: HTMLElement): OfficeSceneExtras {
       // letting go of a followed worker goes back to the whole office
       if (!crew.selected && cam.mode === "follow") cam.reset();
     },
+    ack(id: string) {
+      crew.ack(id);
+    },
     focus(id: string) {
       const w = crew.workers.get(id);
       if (!w) return;

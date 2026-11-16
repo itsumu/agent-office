@@ -420,10 +420,17 @@ export function mountChrome(root: HTMLElement, scene: OfficeScene): Chrome {
     if (id && !model.get(id)) return;
     clearTimeout(goneTimer);
     selected = id;
+    const w = model.get(id);
+    // Looking at a worker's reply counts as reading it: lower the raised hand
+    // and drop it from "needs you" until the agent finishes another turn.
+    if (w && w.status === "waiting") {
+      model.ack(id!);
+      safe(() => scene.ack(id!));
+      topbar.update(model, false);
+    }
     safe(() => scene.select(id));
     if (id && focus) safe(() => scene.focus(id));
     feed.highlight(id);
-    const w = model.get(id);
     const s = store.forWorker(id);
     if (w && s) {
       // an agent the office started: its session panel, not the inspector

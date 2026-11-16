@@ -761,6 +761,14 @@ export class Crew {
     return { x: Math.round(w.x), y: Math.round(w.y) - SPRITE_FOOT + top };
   }
 
+  /** The human read the reply: lower the raised hand until the next waiting event. */
+  ack(id: string): void {
+    const w = this.workers.get(id);
+    if (!w || !w.needsHuman) return;
+    w.needsHuman = false;
+    if (w.act === "waiting") this.setAct(w, "idle", undefined, this.now());
+  }
+
   /** `asciiPass`: nothing; people and furniture are stamped as glyph figures instead. */
   draw(out: DrawCall[], over: DrawCall[], now: number, asciiPass = false) {
     this.dimFurniture = asciiPass;
