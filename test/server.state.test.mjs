@@ -137,6 +137,24 @@ test("idle after IDLE_MS of quiet, once; activity wakes the worker", () => {
   assert.equal(seen.at(-1).kind, "idle");
 });
 
+test("an open tool call keeps a quiet worker out of idle until it closes", () => {
+  const { state, seen, ev, advance } = office();
+  state.ingest(ev({ kind: "session_start" }));
+  state.ingest(ev({ kind: "tool_start", tool: "Bash", category: "bash" }));
+  advance(IDLE_MS * 3);
+  assert.equal(seen.at(-1).kind, "tool_start", "a long-running command is not idle");
+  assert.equal(state.snapshot().workers[0].status, "tool_start");
+  state.ingest(ev({ kind: "tool_end", tool: "Bash", category: "bash" }));
+  advance(IDLE_MS);
+  assert.equal(seen.at(-1).kind, "idle", "once the result arrives the normal quiet rules resume");
+  // A call that never reports back still goes home after the ceiling.
+  const stuck = office();
+  stuck.state.ingest(stuck.ev({ kind: "session_start" }));
+  stuck.state.ingest(stuck.ev({ kind: "tool_start", tool: "Bash", category: "bash" }));
+  stuck.advance(2 * GONE_MS);
+  assert.equal(stuck.seen.at(-1).kind, "session_end");
+});
+
 test("a busy Cursor worker isn't called idle while its transcript is silent", () => {
   const { state, seen, ev, advance } = office();
   state.ingest(ev({ kind: "session_start", agent: "cursor" }));

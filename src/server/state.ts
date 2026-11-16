@@ -94,6 +94,10 @@ interface Worker {
   removeAt?: number;
   /** Its turn ended while interns worked: it needs its human once they are done. */
   heldWait?: boolean;
+  /** Tool calls started but not ended. A silent transcript can still mean a long-running command. */
+  openTools?: number;
+  /** Clock ms of the first still-open call, so a stuck one can't keep the worker forever. */
+  openSince?: number;
 }
 
 export class OfficeState {
@@ -345,6 +349,11 @@ export class OfficeState {
       const quiet = now - w.lastActive;
       const ts = new Date(now).toISOString();
       const supervising = !w.state.parentId && this.busyInterns(w, now) > 0;
+      // A tool call with no result yet means the transcript can go silent while
+      // the agent is plainly still working (Cursor records no tool results at
+      // all). Keep it out of idle/gone until it closes, capped at the gone
+      // timeout so a stuck call can't leave a worker in the office forever.
+      const openCall = (w.openTools ?? 0) > 0 && w.openSince !== undefined && now - w.openSince < this.goneMs;
       if (w.heldWait && !supervising) {
         // The interns are done and nothing moved since: now it is the human's turn.
         w.heldWait = undefined;
@@ -353,13 +362,9 @@ export class OfficeState {
         this.publish(e);
         continue;
       }
-      if (quiet >= this.goneMs && !supervising && !this.holds.has(w.state.workerId)) {
+      if (quiet >= this.goneMs && !supervising && !this.holds.has(w.state.workerId) && !openCall) {
         this.remove(w, { ...this.base(w, ts), kind: w.state.parentId ? "subagent_end" : "session_end" });
-      } else if (quiet >= this.idleMs && w.state.agent !== "cursor" && w.state.status !== "idle" && w.state.status !== "waiting") {
-        // Cursor records tool_use but never tool results or progress: one long
-        // command can leave the transcript silent for minutes while the agent
-        // is plainly still working. Its turn end (or GONE_MS) is the real
-        // signal, so a quiet timer must not call it idle.
+      } else if (quiet >= this.idleMs && !openCall && w.state.status !== "idle" && w.state.status !== "waiting") {
         // A worker waiting on its human still needs them however long it waits; it only goes home.
         const e: RawEvent = { ...this.base(w, ts), kind: "idle" };
         this.fold(w, e, now);
@@ -466,6 +471,8 @@ export class OfficeState {
     s.status = e.kind;
     s.lastTs = e.ts;
     if (e.kind === "tool_start") {
+      w.openTools = (w.openTools ?? 0) + 1;
+      w.openSince ??= now;
       s.toolCalls++;
       s.tool = e.tool;
       s.category = e.category;
@@ -475,6 +482,8 @@ export class OfficeState {
         s.filesTouched = w.files.size;
       }
     } else if (e.kind === "tool_end" || e.kind === "test_pass" || e.kind === "test_fail") {
+      w.openTools = Math.max(0, (w.openTools ?? 0) - 1);
+      if (!w.openTools) w.openSince = undefined;
       // Keep the pose of the call that just finished unless told otherwise.
       if (e.tool) s.tool = e.tool;
       if (e.category) s.category = e.category;
