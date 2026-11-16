@@ -355,7 +355,11 @@ export class OfficeState {
       }
       if (quiet >= this.goneMs && !supervising && !this.holds.has(w.state.workerId)) {
         this.remove(w, { ...this.base(w, ts), kind: w.state.parentId ? "subagent_end" : "session_end" });
-      } else if (quiet >= this.idleMs && w.state.status !== "idle" && w.state.status !== "waiting") {
+      } else if (quiet >= this.idleMs && w.state.agent !== "cursor" && w.state.status !== "idle" && w.state.status !== "waiting") {
+        // Cursor records tool_use but never tool results or progress: one long
+        // command can leave the transcript silent for minutes while the agent
+        // is plainly still working. Its turn end (or GONE_MS) is the real
+        // signal, so a quiet timer must not call it idle.
         // A worker waiting on its human still needs them however long it waits; it only goes home.
         const e: RawEvent = { ...this.base(w, ts), kind: "idle" };
         this.fold(w, e, now);

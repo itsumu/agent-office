@@ -137,6 +137,23 @@ test("idle after IDLE_MS of quiet, once; activity wakes the worker", () => {
   assert.equal(seen.at(-1).kind, "idle");
 });
 
+test("a busy Cursor worker isn't called idle while its transcript is silent", () => {
+  const { state, seen, ev, advance } = office();
+  state.ingest(ev({ kind: "session_start", agent: "cursor" }));
+  state.ingest(ev({ kind: "tool_start", tool: "Read", category: "read", agent: "cursor" }));
+  advance(IDLE_MS * 3);
+  assert.equal(seen.at(-1).kind, "tool_start", "a silent Cursor transcript is not idle");
+  assert.equal(state.snapshot().workers[0].status, "tool_start");
+  advance(GONE_MS);
+  assert.equal(seen.at(-1).kind, "session_end", "but the quiet timer still sends it home");
+  // Other agents keep the normal 90s idle.
+  const other = office();
+  other.state.ingest(other.ev({ kind: "session_start" }));
+  other.state.ingest(other.ev({ kind: "tool_end", tool: "Read" }));
+  other.advance(IDLE_MS);
+  assert.equal(other.seen.at(-1).kind, "idle");
+});
+
 test("a worker waiting on its human stays waiting until it goes home", () => {
   const { state, seen, ev, advance } = office();
   state.ingest(ev({ kind: "session_start" }));
