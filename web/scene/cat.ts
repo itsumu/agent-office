@@ -10,6 +10,17 @@ import type { DrawCall } from "./workers.ts";
 
 type State = "walk" | "sit" | "loaf";
 
+/**
+ * Sort key for the cat: the sprite's back edge rather than its feet. It is
+ * 26px tall, so sorting by feet alone draws it over a desk or chair whose key
+ * sits above those feet when the cat crosses a pod lane — it then looks like
+ * it is standing on the furniture. The extra 8 clears the desk's own +14
+ * offset, keeping desks, chairs and benches in front of it.
+ */
+export function catDepth(y: number): number {
+  return y - SPRITE_FOOT - 8;
+}
+
 export class Cat {
   x = 0;
   y = CORRIDOR_Y;
@@ -84,7 +95,7 @@ export class Cat {
     const hopY = now - this.hop < 300 ? Math.round(Math.sin(((now - this.hop) / 300) * Math.PI) * 6) : 0;
     const x = Math.round(this.x) - (SPRITE_W >> 1), y = Math.round(this.y) - SPRITE_FOOT - hopY;
     out.push({
-      y: this.y,
+      y: catDepth(this.y),
       fn: (g) => {
         g.fillStyle = "rgba(14,13,22,0.3)";
         g.fillRect(Math.round(this.x) - 5, Math.round(this.y) + 1, 10, 1);

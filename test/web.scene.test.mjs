@@ -28,14 +28,26 @@ async function load(...entries) {
 
 const {
   Layout, Camera, SEAT_W, MAX_BENCH, MAX_HOT, POD_H, DESK_W, DESK_DY, SEAT_DY, DESK_ROW, ROOM_MIN_W, ROOM_MIN_W_TALL,
+  LANE_DY, deskTop, catDepth,
   internSummary, OfficeModel, ControlStore,
 } = await load(
   "web/scene/layout.ts",
   "web/scene/camera.ts",
   "web/scene/util.ts",
+  "web/scene/cat.ts",
   "web/ui/state.ts",
   "web/ui/control/store.ts",
 );
+
+test("the cat sorts behind pod desks, chairs and benches", () => {
+  const dy = deskTop({ y: 200 }, { y: 0 });
+  const laneY = dy + LANE_DY; // where the cat walks when it visits a pod
+  const key = catDepth(laneY + 2);
+  assert.ok(key < dy + 14, "desk must draw after the cat");
+  assert.ok(key < dy + 26.5, "chair must draw after the cat");
+  assert.ok(key < dy + 15, "bench must draw after the cat");
+  assert.ok(key > dy - 20, "but it still sorts with the pod, not at the very back");
+});
 
 /** A pod with one main worker and `n` interns, packed and settled. */
 function crew(n, mains = 1) {
