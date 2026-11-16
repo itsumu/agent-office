@@ -57,7 +57,11 @@ export function parseCursorLine(state: CursorState, line: string): RawEvent[] {
     if (o.status === "aborted" || o.status === "cancelled") out.push(...emit(ctx, "error", ts, { summary: "Interrupted", isError: true }));
     else if ((o.status && o.status !== "success") || o.error) out.push(...emit(ctx, "error", ts, { summary: "Error", isError: true }));
     else out.push(...emit(ctx, "reply", ts, { summary: "Replied" }));
-    out.push(...(ctx.parentId ? emit(ctx, "subagent_end", ts) : emit(ctx, "waiting", ts, { summary: "Waiting" })));
+    // Cursor rewrites the whole transcript as it goes and can close a turn while
+    // the agent is still working, so turn_ended alone is not proof it needs the
+    // human. The loop raises the hand only once the file has gone quiet
+    // (housekeeping); an intern just leaves as before.
+    if (ctx.parentId) out.push(...emit(ctx, "subagent_end", ts));
     return out;
   }
   const blocks: any[] = isObj(o.message) && Array.isArray(o.message.content) ? o.message.content : [];

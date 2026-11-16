@@ -64,6 +64,8 @@ export const SUBAGENT_BUSY_QUIET_MS = 10 * 60_000;
 export const INTERN_DONE_MS = 60_000;
 /** Gemini CLI never writes "turn over": a reply followed by this much quiet is one. */
 export const GEMINI_SETTLE_MS = 5_000;
+/** Cursor rewrites its transcript and closes turns mid-task: wait longer before believing it is idle. */
+export const CURSOR_SETTLE_MS = 8_000;
 const KEEPALIVE_MS = 60_000;
 /** Files quiet this long stop being watched (they are picked up again if they grow). */
 const FORGET_MS = GONE_MS + 10 * 60_000;
@@ -1132,7 +1134,12 @@ class Watcher {
   private housekeeping(now: number): void {
     const busyParents = new Set<string>();
     for (const ctx of this.registry.values()) {
-      if (ctx.agent === "gemini" && !ctx.parentId && ctx.announced && ctx.lastKind === "reply" && !ctx.pending.size && now - ctx.lastActivityMs >= GEMINI_SETTLE_MS) {
+      // Gemini and Cursor don't record a reliable "waiting on you" marker: their
+      // turn end is just a reply. Believe it only after the transcript has been
+      // quiet for a while, so a busy agent (or a rewritten file) never raises
+      // the hand. Cursor gets longer: its rewrites can repeat the same turn end.
+      const settle = ctx.agent === "gemini" ? GEMINI_SETTLE_MS : ctx.agent === "cursor" ? CURSOR_SETTLE_MS : 0;
+      if (settle && !ctx.parentId && ctx.announced && ctx.lastKind === "reply" && !ctx.pending.size && now - ctx.lastActivityMs >= settle) {
         // Stamped just after the reply, so an old session isn't made to look fresh.
         const at = Date.parse(ctx.lastTs ?? "") || now;
         this.forwardAll(emit(ctx, "waiting", iso(Math.min(now, at + 1_000)), { summary: "Waiting" }));

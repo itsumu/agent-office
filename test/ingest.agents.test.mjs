@@ -124,7 +124,21 @@ test("cursor: no timestamps or results; calls close when the model speaks again,
   // Test results are never written, so there is no verdict.
   assert.equal(evs.filter((e) => e.kind.startsWith("test_")).length, 0);
   assert.equal(st.lastSpawnRole, "explore");
-  assert.deepEqual(kinds(evs).slice(-2), ["reply", "waiting"]);
+  assert.equal(kinds(evs).at(-1), "reply", "a turn end is a reply, not an instant hand-up");
+  assert.ok(!kinds(evs).includes("waiting"), "Cursor raises the hand only after the transcript goes quiet");
+});
+
+test("cursor: a rewritten transcript repeating turn_ended never gets stuck waiting", () => {
+  const st = P.createCursorState({ sessionId: "x", slug: "tmp-demo-app" });
+  st.clock = "2026-01-15T10:00:00.000Z";
+  const evs = [];
+  for (const line of [
+    JSON.stringify({ type: "turn_ended", status: "success" }),
+    JSON.stringify({ type: "turn_ended", status: "success" }),
+    JSON.stringify({ role: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { path: "/tmp/demo-app/a.ts" } }] } }),
+  ]) evs.push(...P.parseCursorLine(st, line));
+  assert.ok(!evs.some((e) => e.kind === "waiting"), "no hand-up while the agent keeps working");
+  assert.ok(evs.some((e) => e.kind === "tool_start"), "the next tool call still arrives");
 });
 
 test("cursor: a subagent transcript is an intern that leaves at its turn end; aborted turns are errors", () => {
@@ -134,7 +148,7 @@ test("cursor: a subagent transcript is an intern that leaves at its turn end; ab
   assert.ok(evs.every((e) => e.parentId === CID && e.role === "explore"));
   const m = P.createCursorState({ sessionId: "z", slug: "x" });
   const ab = P.parseCursorLine(m, JSON.stringify({ type: "turn_ended", status: "aborted" }));
-  assert.deepEqual(kinds(ab), ["session_start", "error", "waiting"]);
+  assert.deepEqual(kinds(ab), ["session_start", "error"], "an interrupted turn is an error, not a hand-up");
   assert.equal(ab[1].summary, "Interrupted");
 });
 
