@@ -155,6 +155,17 @@ export async function startServer(opts: ServerOptions): Promise<OfficeServer> {
     const q = raw.indexOf("?");
     const path = q === -1 ? raw : raw.slice(0, q);
     if (control?.handle(req, res, path)) return;
+    // The human read a worker's reply. The state keeps it down (so a reload
+    // doesn't raise the hand again) until the agent ends another turn.
+    if (path === "/api/ack") {
+      if (req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        return text(res, 405, "Method not allowed");
+      }
+      if (crossSite(req, allowed)) return text(res, 403, "Forbidden: cross-site request.");
+      const id = q === -1 ? null : new URLSearchParams(raw.slice(q + 1)).get("id");
+      return json(res, 200, { ok: !!id && state.ack(id) });
+    }
     if (req.method !== "GET" && req.method !== "HEAD") {
       res.setHeader("Allow", "GET, HEAD");
       return text(res, 405, "Method not allowed");

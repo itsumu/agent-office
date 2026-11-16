@@ -208,6 +208,17 @@ export class OfficeState {
     return !!w && w.removeAt === undefined;
   }
 
+  /** The human has read this worker's reply: stop showing it as needing them.
+   *  Only the status changes, so a fresh `waiting` event from the agent (its
+   *  next turn) raises the hand again without anything else to remember. */
+  ack(workerId: string): boolean {
+    const w = this.workers.get(workerId);
+    if (!w || w.state.status !== "waiting" || w.removeAt !== undefined) return false;
+    w.state.status = "reply";
+    w.heldWait = undefined;
+    return true;
+  }
+
   /** Exempt a worker from the quiet timer and reconcileLocal: its process owns its lifetime. Moves with a rename. */
   hold(workerId: string): void {
     this.holds.add(workerId);

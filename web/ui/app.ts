@@ -427,6 +427,8 @@ export function mountChrome(root: HTMLElement, scene: OfficeScene): Chrome {
       model.ack(id!);
       safe(() => scene.ack(id!));
       topbar.update(model, false);
+      // Keep it on the server too, so a reload doesn't raise the hand again.
+      void fetch(`/api/ack?id=${encodeURIComponent(id!)}`, { method: "POST" }).catch(() => {});
     }
     safe(() => scene.select(id));
     if (id && focus) safe(() => scene.focus(id));

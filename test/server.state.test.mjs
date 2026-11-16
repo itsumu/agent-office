@@ -55,6 +55,20 @@ test("seq is monotonic and the ring keeps the last 200, oldest first", () => {
   for (let i = 1; i < recent.length; i++) assert.equal(recent[i].seq, recent[i - 1].seq + 1);
 });
 
+test("ack lowers a waiting hand in the snapshot; the next turn raises it again", () => {
+  const { state, ev } = office();
+  state.ingest(ev({ kind: "waiting" }));
+  const status = () => state.snapshot().workers.find((w) => w.workerId === "s1").status;
+  assert.equal(status(), "waiting");
+  assert.equal(state.ack("s1"), true);
+  assert.equal(status(), "reply", "a reload's snapshot no longer says it needs you");
+  assert.equal(state.ack("s1"), false, "already read");
+  assert.equal(state.ack("missing"), false);
+  state.ingest(ev({ kind: "prompt" }));
+  state.ingest(ev({ kind: "waiting" }));
+  assert.equal(status(), "waiting", "the agent's next turn raises the hand again");
+});
+
 test("a worker seen mid-session gets a synthetic arrival first", () => {
   const { state, seen, ev } = office();
   state.ingest(ev({ kind: "tool_start", tool: "Read", category: "read", summary: "Read a.ts" }));
