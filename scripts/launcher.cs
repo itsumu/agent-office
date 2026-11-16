@@ -102,7 +102,7 @@ internal static class Launcher
 
         Application.EnableVisualStyles();
         _tray = new NotifyIcon();
-        _tray.Icon = SystemIcons.Application;
+        _tray.Icon = LoadIcon();
         _tray.Text = "agent office - " + Url;
         _tray.Visible = true;
         _tray.ContextMenu = new ContextMenu(new MenuItem[]
@@ -216,6 +216,20 @@ internal static class Launcher
     {
         if (a.Length > 0 && a.IndexOfAny(new char[] { ' ', '\t', '"' }) < 0) return a;
         return "\"" + a.Replace("\"", "\\\"") + "\"";
+    }
+
+    /** The site's pixel-art monitor, embedded as a resource by build-exe.mjs. */
+    private static Icon LoadIcon()
+    {
+        try
+        {
+            using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("agent-office.ico"))
+            {
+                if (s != null) return new Icon(s, SystemInformation.SmallIconSize);
+            }
+        }
+        catch { }
+        return SystemIcons.Application;
     }
 
     private static void OpenBrowser(string url)

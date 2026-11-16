@@ -17,6 +17,7 @@ const STAGE = join(ROOT, ".exe-stage");
 const PAYLOAD = join(STAGE, "stage");
 const ZIP = join(STAGE, "payload.zip");
 const STUB = join(STAGE, "launcher-stub.exe");
+const ICO = join(STAGE, "agent-office.ico");
 const OUT_DIR = join(ROOT, "release");
 const OUT = join(OUT_DIR, "agent-office.exe");
 
@@ -55,7 +56,14 @@ execFileSync("powershell.exe", ["-NoProfile", "-EncodedCommand", Buffer.from(ps,
 });
 log(`payload.zip ${(statSync(ZIP).size / 1048576).toFixed(1)} MB`);
 
-// 4. Compile the tiny C# stub (/target:winexe: no console window on double-click).
+// 4. The tray icon and the exe's own icon, generated from the site's pixel-art
+//    favicon. Kept in the staging dir: no binary icon is committed to the repo.
+execFileSync("powershell.exe", [
+  "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(ROOT, "scripts", "make-icon.ps1"),
+  "-Src", join(ROOT, "site", "assets", "favicon-32.png"), "-Dst", ICO,
+], { cwd: ROOT, stdio: "inherit" });
+
+// 5. Compile the tiny C# stub (/target:winexe: no console window on double-click).
 const win = process.env.WINDIR ?? "C:\\Windows";
 const csc = [
   join(win, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
@@ -66,11 +74,12 @@ const refs = ["System.Windows.Forms.dll", "System.Drawing.dll", "System.IO.Compr
   .map((name) => "/r:" + (existsSync(join(dirname(csc), name)) ? join(dirname(csc), name) : name));
 execFileSync(csc, [
   "/nologo", "/target:winexe", "/optimize+", "/platform:anycpu", "/out:" + STUB,
+  "/resource:" + ICO + ",agent-office.ico", "/win32icon:" + ICO,
   ...refs, join(ROOT, "scripts", "launcher.cs"),
 ], { cwd: ROOT, stdio: "inherit" });
-log("compiled launcher stub");
+log("compiled launcher stub (with embedded favicon icon)");
 
-// 5. Append the payload and the fixed 32-byte footer the stub reads back.
+// 6. Append the payload and the fixed 32-byte footer the stub reads back.
 const zip = readFileSync(ZIP);
 const stub = readFileSync(STUB);
 // A fresh id per build gives a fresh unpack directory, so a rebuilt exe never
