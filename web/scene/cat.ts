@@ -21,6 +21,11 @@ export function catDepth(y: number): number {
   return y - SPRITE_FOOT - 8;
 }
 
+/** Ground-level decoration first, then the usual far-to-near painter's order. */
+export function drawOrder(a: DrawCall, b: DrawCall): number {
+  return Number(!!b.ground) - Number(!!a.ground) || a.y - b.y;
+}
+
 export class Cat {
   x = 0;
   y = CORRIDOR_Y;

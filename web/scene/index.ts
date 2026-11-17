@@ -12,7 +12,7 @@
 import type { CreateOfficeScene, OfficeEvent, OfficeScene, RenderMode, Snapshot } from "../contract.ts";
 import { C, rgba } from "./palette.ts";
 import { Crew, brandInk, type DrawCall } from "./workers.ts";
-import { Cat } from "./cat.ts";
+import { Cat, drawOrder } from "./cat.ts";
 import { Sky, rainyToday, skyAt } from "./sky.ts";
 import { Lighting, shaft, type Light } from "./lighting.ts";
 import { Camera, type Insets } from "./camera.ts";
@@ -310,7 +310,9 @@ export function create(mount: HTMLElement): OfficeSceneExtras {
         continue;
       }
       const { bm, oy } = P.decorBitmap(d.kind, d.w, d.seed);
-      calls.push({ y: d.y + 58, fn: (g) => g.drawImage(bm.c, d.x - 4, d.y - oy + 10) });
+      // Lounge/pingpong/arcade are floor-level decorations (the lounge draws a
+      // purple round rug): keep them below the cat and everyone standing there.
+      calls.push({ y: d.y + 58, ground: true, fn: (g) => g.drawImage(bm.c, d.x - 4, d.y - oy + 10) });
     }
   }
 
@@ -379,7 +381,10 @@ export function create(mount: HTMLElement): OfficeSceneExtras {
       const u = plan.uplink;
       calls.push({ y: u.y + 6, fn: (g) => R.drawUplink(g, plan, now, crew.activity()) });
     }
-    calls.sort((a, b) => a.y - b.y);
+    // Ground decorations first, then the usual far-to-near painter's order.
+    // The cat uses catDepth() to sort behind desks/chairs, but must still be
+    // drawn on top of rugs and lounge floors.
+    calls.sort(drawOrder);
     for (const c of calls) c.fn(wg);
     if (!asciiPass) {
       const lights = gatherLights(now, st.sun);

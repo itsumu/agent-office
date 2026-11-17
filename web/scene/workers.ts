@@ -137,7 +137,12 @@ export function brandInk(agent: AgentKind): string {
 const isRemote = (h?: Host) => !!h && h.kind !== "local";
 const OFFLINE = /^remote offline/i;
 
-export interface DrawCall { y: number; fn: (g: CanvasRenderingContext2D) => void }
+export interface DrawCall {
+  y: number;
+  fn: (g: CanvasRenderingContext2D) => void;
+  /** Floor-level decoration (a rug, a lounge): drawn before anything that stands on it. */
+  ground?: boolean;
+}
 
 export class Crew {
   workers = new Map<string, Worker>();

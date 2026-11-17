@@ -28,7 +28,7 @@ async function load(...entries) {
 
 const {
   Layout, Camera, SEAT_W, MAX_BENCH, MAX_HOT, POD_H, DESK_W, DESK_DY, SEAT_DY, DESK_ROW, ROOM_MIN_W, ROOM_MIN_W_TALL,
-  LANE_DY, deskTop, catDepth,
+  LANE_DY, deskTop, catDepth, drawOrder,
   internSummary, OfficeModel, ControlStore,
 } = await load(
   "web/scene/layout.ts",
@@ -47,6 +47,18 @@ test("the cat sorts behind pod desks, chairs and benches", () => {
   assert.ok(key < dy + 26.5, "chair must draw after the cat");
   assert.ok(key < dy + 15, "bench must draw after the cat");
   assert.ok(key > dy - 20, "but it still sorts with the pod, not at the very back");
+});
+
+test("ground rugs draw before the cat, desks and chairs after it", () => {
+  const rug = { y: 500, ground: true };
+  const cat = { y: catDepth(700) };
+  const desk = { y: 742 };
+  const chair = { y: 754.5 };
+  const calls = [desk, cat, rug, chair];
+  calls.sort(drawOrder);
+  assert.equal(calls[0], rug, "floor decoration first");
+  assert.equal(calls[1], cat, "the cat stands on the rug");
+  assert.ok(calls.indexOf(desk) > 1 && calls.indexOf(chair) > 1, "furniture stays in front of the cat");
 });
 
 test("reading a waiting worker clears 'needs you'; the next turn raises it again", () => {
