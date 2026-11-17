@@ -13,7 +13,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import type { AgentKind, OfficeEvent } from "./shared/events.ts";
-import { BRAND } from "./shared/events.ts";
+import { ACTIVE_WINDOW_MS, BRAND } from "./shared/events.ts";
 import { startIngest } from "./ingest/index.ts";
 import { scanProcesses } from "./ingest/presence.ts";
 import { DEFAULT_SEED, startDemo } from "./demo/index.ts";
@@ -641,12 +641,61 @@ async function main(): Promise<void> {
   // Use that mtime as a heartbeat so a working Cursor worker is neither called
   // idle nor sent home by the quiet timer. Older Cursors lack the file.
   const cursorBeat = join(homedir(), ".cursor", "ai-tracking", "ai-code-tracking.db");
+  // Newer Cursor writes agent-transcripts/*.jsonl only when a turn ends: live
+  // sessions live in globalStorage/state.vscdb (composerHeaders), created as
+  // soon as the agent starts. Discover those so a running agent walks in at
+  // once instead of appearing after it has finished. node:sqlite ships with
+  // Node >= 22.5; older Nodes simply keep the jsonl behaviour.
+  const cursorVscdb = join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "Cursor", "User", "globalStorage", "state.vscdb");
+  let cursorSqlite: any = null;
+  try {
+    const emit = process.emitWarning;
+    process.emitWarning = ((w: unknown, ...rest: unknown[]) => {
+      const msg = typeof w === "string" ? w : (w as Error)?.message ?? "";
+      if (/sqlite/i.test(msg)) return;
+      return (emit as (...a: unknown[]) => void).call(process, w, ...rest);
+    }) as typeof process.emitWarning;
+    try { cursorSqlite = await import("node:sqlite"); }
+    finally { process.emitWarning = emit; }
+  } catch {}
   const cursorBeatTimer = o.demo ? undefined : setInterval(() => {
+    const now = Date.now();
     try {
-      if (Date.now() - statSync(cursorBeat).mtimeMs > 3 * 60_000) return;
-      for (const w of state.sessions()) if (w.agent === "cursor") state.alive(w.workerId);
+      if (now - statSync(cursorBeat).mtimeMs <= 3 * 60_000) {
+        for (const w of state.sessions()) if (w.agent === "cursor") state.alive(w.workerId);
+      }
     } catch {
       // Missing / unreadable: the normal quiet rules apply.
+    }
+    if (!cursorSqlite) return;
+    try {
+      if (now - statSync(cursorVscdb).mtimeMs > 5 * 60_000) return;
+      const db = new cursorSqlite.DatabaseSync(cursorVscdb, { readOnly: true });
+      try {
+        const rows = db.prepare("select composerId, createdAt, lastUpdatedAt, recency, isArchived, value from composerHeaders where isArchived = 0").all() as Record<string, any>[];
+        for (const r of rows) {
+          let mode = "", name = "Cursor";
+          try {
+            const v = JSON.parse(String(r.value));
+            mode = v.unifiedMode ?? "";
+            name = v.name || v.title || "Cursor";
+          } catch {}
+          if (mode !== "agent") continue;
+          const at = Math.max(Number(r.createdAt ?? 0), Number(r.lastUpdatedAt ?? 0), Number(r.recency ?? 0));
+          if (!at || now - at > ACTIVE_WINDOW_MS) continue;
+          const id = String(r.composerId);
+          if (!state.has(id)) {
+            const ev: Parameters<OfficeState["ingest"]>[0] = {
+              ts: new Date(Math.min(at, now)).toISOString(),
+              kind: "session_start", agent: "cursor", workerId: id, project: name,
+            };
+            state.ingest(ev);
+          }
+          state.alive(id);
+        }
+      } finally { db.close(); }
+    } catch {
+      // No vscdb, locked, or a changed schema: keep the old jsonl behaviour.
     }
   }, 10_000);
   cursorBeatTimer?.unref?.();
